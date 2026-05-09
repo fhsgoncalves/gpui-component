@@ -5,7 +5,7 @@
 use anyhow::Result;
 use gpui::{
     Action, App, AppContext, Bounds, ClipboardItem, Context, Edges, Entity, EntityInputHandler,
-    EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement, KeyBinding,
+    EventEmitter, FocusHandle, Focusable, Hsla, InteractiveElement as _, IntoElement, KeyBinding,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
     Pixels, Point, Render, ScrollHandle, ScrollWheelEvent, ShapedLine, SharedString, Styled as _,
     Subscription, Task, UTF16Selection, Window, actions, div, point, prelude::FluentBuilder as _,
@@ -109,6 +109,14 @@ pub enum InputEvent {
 }
 
 pub(super) const CONTEXT: &str = "Input";
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct InputDecoration {
+    pub range: Range<usize>,
+    pub fill: Option<Hsla>,
+    pub border: Option<Hsla>,
+    pub border_width: Pixels,
+}
 
 pub(crate) fn init(cx: &mut App) {
     cx.bind_keys([
@@ -343,6 +351,7 @@ pub struct InputState {
     pub(crate) scroll_size: gpui::Size<Pixels>,
     pub(super) editor_scrollbar_paddings: Cell<Edges<Pixels>>,
     pub(super) editor_scrollbar_snapshot: Cell<Option<EditorScrollbarSnapshot>>,
+    pub(super) decorations: Vec<InputDecoration>,
     pub(super) text_align: TextAlign,
 
     /// The mask pattern for formatting the input text
@@ -462,6 +471,7 @@ impl InputState {
                 left: px(0.),
             }),
             editor_scrollbar_snapshot: Cell::new(None),
+            decorations: Vec::new(),
             deferred_scroll_offset: None,
             preferred_column: None,
             placeholder: SharedString::default(),
@@ -661,6 +671,15 @@ impl InputState {
     #[inline]
     pub fn diagnostics_mut(&mut self) -> Option<&mut DiagnosticSet> {
         self.mode.diagnostics_mut()
+    }
+
+    pub fn set_decorations(&mut self, decorations: Vec<InputDecoration>, cx: &mut Context<Self>) {
+        if self.decorations == decorations {
+            return;
+        }
+
+        self.decorations = decorations;
+        cx.notify();
     }
 
     /// Set placeholder
