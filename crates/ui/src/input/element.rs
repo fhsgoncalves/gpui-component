@@ -21,7 +21,7 @@ use crate::{
     scroll::Scrollbar,
 };
 
-use super::{InputState, LastLayout, WhitespaceIndicators, mode::InputMode};
+use super::{InputDecoration, InputState, LastLayout, WhitespaceIndicators, mode::InputMode};
 
 const BOTTOM_MARGIN_ROWS: usize = 3;
 pub(super) const RIGHT_MARGIN: Pixels = px(10.);
@@ -650,6 +650,108 @@ impl TextElement {
         builder.build().ok()
     }
 
+    fn layout_match_range_rect(
+        range: Range<usize>,
+        last_layout: &LastLayout,
+        bounds: &Bounds<Pixels>,
+        stroke_width: Pixels,
+    ) -> Option<Path<Pixels>> {
+        if range.is_empty() {
+            return None;
+        }
+
+        if range.start < last_layout.visible_range_offset.start
+            || range.end > last_layout.visible_range_offset.end
+        {
+            return None;
+        }
+
+        let line_height = last_layout.line_height;
+        let line_number_width = last_layout.line_number_width;
+        let mut offset_y = last_layout.visible_top;
+        let mut left: Option<Pixels> = None;
+        let mut right: Option<Pixels> = None;
+        let mut top: Option<Pixels> = None;
+        let mut bottom: Option<Pixels> = None;
+
+        for (prev_lines_offset, line) in last_layout
+            .visible_line_byte_offsets
+            .iter()
+            .zip(last_layout.lines.iter())
+        {
+            let line_start = *prev_lines_offset;
+            let line_end = line_start + line.len();
+
+            if range.end < line_start || range.start > line_end {
+                offset_y += line.size(line_height).height;
+                continue;
+            }
+
+            let start_ix = range.start.saturating_sub(line_start).min(line.len());
+            let end_ix = range.end.saturating_sub(line_start).min(line.len());
+
+            let Some(start) = line.position_for_index(start_ix, last_layout, false) else {
+                offset_y += line.size(line_height).height;
+                continue;
+            };
+            let Some(end) = line.position_for_index(end_ix, last_layout, false) else {
+                offset_y += line.size(line_height).height;
+                continue;
+            };
+
+            let wrapped_lines =
+                (end.y / line_height).ceil() as usize - (start.y / line_height).ceil() as usize;
+            let mut end_x = end.x;
+            if wrapped_lines > 0 {
+                end_x = line.size(line_height).width;
+            }
+            end_x = end_x.max(start.x + px(6.));
+
+            let line_top = offset_y + start.y;
+            let line_bottom = line_top + line_height;
+            left = Some(left.map_or(start.x, |left| left.min(start.x)));
+            right = Some(right.map_or(end_x, |right| right.max(end_x)));
+            top = Some(top.map_or(line_top, |top| top.min(line_top)));
+            bottom = Some(bottom.map_or(line_bottom, |bottom| bottom.max(line_bottom)));
+
+            for i in 1..=wrapped_lines {
+                let visual_top = offset_y + start.y + i as f32 * line_height;
+                let visual_end_x = if i < wrapped_lines {
+                    line.size(line_height).width
+                } else {
+                    end.x
+                };
+                let visual_end_x = visual_end_x.max(px(6.));
+
+                left = Some(left.map_or(px(0.), |left| left.min(px(0.))));
+                right = Some(right.map_or(visual_end_x, |right| right.max(visual_end_x)));
+                top = Some(top.map_or(visual_top, |top| top.min(visual_top)));
+                bottom = Some(bottom.map_or(visual_top + line_height, |bottom| {
+                    bottom.max(visual_top + line_height)
+                }));
+            }
+
+            if range.end <= line_end {
+                break;
+            }
+
+            offset_y += line.size(line_height).height;
+        }
+
+        let (Some(left), Some(right), Some(top), Some(bottom)) = (left, right, top, bottom) else {
+            return None;
+        };
+
+        let origin = bounds.origin + point(line_number_width, px(0.));
+        let mut builder = gpui::PathBuilder::stroke(stroke_width);
+        builder.move_to(origin + point(left, top));
+        builder.line_to(origin + point(right, top));
+        builder.line_to(origin + point(right, bottom));
+        builder.line_to(origin + point(left, bottom));
+        builder.close();
+        builder.build().ok()
+    }
+
     fn layout_search_matches(
         &self,
         last_layout: &LastLayout,
@@ -711,6 +813,38 @@ impl TextElement {
         }
 
         paths
+    }
+
+    fn layout_decorations(
+        &self,
+        decorations: &[InputDecoration],
+        last_layout: &LastLayout,
+        bounds: &Bounds<Pixels>,
+    ) -> (Vec<(Path<Pixels>, Hsla)>, Vec<(Path<Pixels>, Hsla)>) {
+        let mut fills = Vec::with_capacity(decorations.len());
+        let mut borders = Vec::with_capacity(decorations.len());
+        for decoration in decorations {
+            if let Some(fill) = decoration.fill {
+                if let Some(path) =
+                    Self::layout_match_range(decoration.range.clone(), last_layout, bounds)
+                {
+                    fills.push((path, fill));
+                }
+            }
+
+            if let Some(border) = decoration.border {
+                if let Some(path) = Self::layout_match_range_rect(
+                    decoration.range.clone(),
+                    last_layout,
+                    bounds,
+                    decoration.border_width,
+                ) {
+                    borders.push((path, border));
+                }
+            }
+        }
+
+        (fills, borders)
     }
 
     fn layout_selections(
@@ -1376,6 +1510,8 @@ pub(super) struct PrepaintState {
     selection_path: Option<Path<Pixels>>,
     hover_highlight_path: Option<Path<Pixels>>,
     search_match_paths: Vec<(Path<Pixels>, bool)>,
+    decoration_fill_paths: Vec<(Path<Pixels>, Hsla)>,
+    decoration_border_paths: Vec<(Path<Pixels>, Hsla)>,
     document_color_paths: Vec<(Path<Pixels>, Hsla)>,
     hover_definition_hitbox: Option<Hitbox>,
     indent_guides_path: Option<Path<Pixels>>,
@@ -1783,6 +1919,8 @@ impl Element for TextElement {
             self.layout_document_colors(&document_colors, &last_layout, &bounds, cx);
 
         let state = self.state.read(cx);
+        let (decoration_fill_paths, decoration_border_paths) =
+            self.layout_decorations(&state.decorations, &last_layout, &bounds);
         let line_numbers = if state.mode.line_number() {
             let mut line_numbers = Vec::with_capacity(last_layout.visible_buffer_lines.len());
             let other_line_runs = vec![TextRun {
@@ -1858,6 +1996,8 @@ impl Element for TextElement {
             current_row,
             selection_path,
             search_match_paths,
+            decoration_fill_paths,
+            decoration_border_paths,
             hover_highlight_path,
             hover_definition_hitbox,
             document_color_paths,
@@ -1952,6 +2092,10 @@ impl Element for TextElement {
         // Paint indent guides
         if let Some(path) = prepaint.indent_guides_path.take() {
             window.paint_path(path, cx.theme().border.opacity(0.85));
+        }
+
+        for (path, color) in prepaint.decoration_fill_paths.iter() {
+            window.paint_path(path.clone(), *color);
         }
 
         // Paint selections
@@ -2056,6 +2200,10 @@ impl Element for TextElement {
                     offset_y += line_height;
                 }
             }
+        }
+
+        for (path, color) in prepaint.decoration_border_paths.iter() {
+            window.paint_path(path.clone(), *color);
         }
 
         // Paint blinking cursor

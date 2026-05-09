@@ -7,11 +7,9 @@
   (code_span_delimiter)
 ] @punctuation.delimiter
 
-((emphasis) @emphasis
-  (#set! highlight.allow-overlap))
+(emphasis) @emphasis
 
-((strong_emphasis) @emphasis.strong
-  (#set! highlight.allow-overlap))
+(strong_emphasis) @emphasis.strong
 
 [
   (link_destination)
