@@ -511,6 +511,24 @@ impl TextElement {
         last_layout: &LastLayout,
         bounds: &Bounds<Pixels>,
     ) -> Option<Path<Pixels>> {
+        Self::layout_match_range_path(range, last_layout, bounds, None)
+    }
+
+    fn layout_match_range_outline(
+        range: Range<usize>,
+        last_layout: &LastLayout,
+        bounds: &Bounds<Pixels>,
+        stroke_width: Pixels,
+    ) -> Option<Path<Pixels>> {
+        Self::layout_match_range_path(range, last_layout, bounds, Some(stroke_width))
+    }
+
+    fn layout_match_range_path(
+        range: Range<usize>,
+        last_layout: &LastLayout,
+        bounds: &Bounds<Pixels>,
+        stroke_width: Option<Pixels>,
+    ) -> Option<Path<Pixels>> {
         if range.is_empty() {
             return None;
         }
@@ -621,6 +639,67 @@ impl TextElement {
             }
         }
 
+        if stroke_width.is_some() && line_corners.len() > 1 {
+            let mut max_right = line_corners[0].top_right.x;
+            for corners in &line_corners {
+                max_right = max_right.max(corners.top_right.x);
+            }
+
+            let last_ix = line_corners.len() - 1;
+            for (ix, corners) in line_corners.iter_mut().enumerate() {
+                if ix < last_ix {
+                    corners.top_right.x = max_right;
+                    corners.bottom_right.x = max_right;
+                }
+            }
+        }
+
+        if let Some(stroke_width) = stroke_width {
+            let mut points = Vec::new();
+            let first = line_corners.first().unwrap();
+            points.push(first.top_left);
+            points.push(first.top_right);
+
+            for ix in 0..line_corners.len() {
+                let corners = &line_corners[ix];
+                points.push(corners.bottom_right);
+
+                if let Some(next) = line_corners.get(ix + 1) {
+                    if next.top_right.x != corners.bottom_right.x {
+                        points.push(point(next.top_right.x, corners.bottom_right.y));
+                    }
+                    points.push(next.top_right);
+                }
+            }
+
+            let last = line_corners.last().unwrap();
+            points.push(last.bottom_left);
+
+            for ix in (0..line_corners.len()).rev() {
+                let corners = &line_corners[ix];
+                points.push(corners.top_left);
+
+                if ix > 0 {
+                    let previous = &line_corners[ix - 1];
+                    if previous.bottom_left.x != corners.top_left.x {
+                        points.push(point(previous.bottom_left.x, corners.top_left.y));
+                    }
+                    points.push(previous.bottom_left);
+                }
+            }
+
+            let path_origin = bounds.origin + point(line_number_width, px(0.));
+            let first_p = *points.first().unwrap();
+            let mut builder = gpui::PathBuilder::stroke(stroke_width);
+            builder.move_to(path_origin + first_p);
+            for p in points.iter().skip(1) {
+                builder.line_to(path_origin + *p);
+            }
+            builder.close();
+
+            return builder.build().ok();
+        }
+
         for corners in &line_corners {
             points.push(corners.top_right);
             points.push(corners.bottom_right);
@@ -647,108 +726,6 @@ impl TextElement {
             builder.line_to(path_origin + *p);
         }
 
-        builder.build().ok()
-    }
-
-    fn layout_match_range_rect(
-        range: Range<usize>,
-        last_layout: &LastLayout,
-        bounds: &Bounds<Pixels>,
-        stroke_width: Pixels,
-    ) -> Option<Path<Pixels>> {
-        if range.is_empty() {
-            return None;
-        }
-
-        if range.start < last_layout.visible_range_offset.start
-            || range.end > last_layout.visible_range_offset.end
-        {
-            return None;
-        }
-
-        let line_height = last_layout.line_height;
-        let line_number_width = last_layout.line_number_width;
-        let mut offset_y = last_layout.visible_top;
-        let mut left: Option<Pixels> = None;
-        let mut right: Option<Pixels> = None;
-        let mut top: Option<Pixels> = None;
-        let mut bottom: Option<Pixels> = None;
-
-        for (prev_lines_offset, line) in last_layout
-            .visible_line_byte_offsets
-            .iter()
-            .zip(last_layout.lines.iter())
-        {
-            let line_start = *prev_lines_offset;
-            let line_end = line_start + line.len();
-
-            if range.end < line_start || range.start > line_end {
-                offset_y += line.size(line_height).height;
-                continue;
-            }
-
-            let start_ix = range.start.saturating_sub(line_start).min(line.len());
-            let end_ix = range.end.saturating_sub(line_start).min(line.len());
-
-            let Some(start) = line.position_for_index(start_ix, last_layout, false) else {
-                offset_y += line.size(line_height).height;
-                continue;
-            };
-            let Some(end) = line.position_for_index(end_ix, last_layout, false) else {
-                offset_y += line.size(line_height).height;
-                continue;
-            };
-
-            let wrapped_lines =
-                (end.y / line_height).ceil() as usize - (start.y / line_height).ceil() as usize;
-            let mut end_x = end.x;
-            if wrapped_lines > 0 {
-                end_x = line.size(line_height).width;
-            }
-            end_x = end_x.max(start.x + px(6.));
-
-            let line_top = offset_y + start.y;
-            let line_bottom = line_top + line_height;
-            left = Some(left.map_or(start.x, |left| left.min(start.x)));
-            right = Some(right.map_or(end_x, |right| right.max(end_x)));
-            top = Some(top.map_or(line_top, |top| top.min(line_top)));
-            bottom = Some(bottom.map_or(line_bottom, |bottom| bottom.max(line_bottom)));
-
-            for i in 1..=wrapped_lines {
-                let visual_top = offset_y + start.y + i as f32 * line_height;
-                let visual_end_x = if i < wrapped_lines {
-                    line.size(line_height).width
-                } else {
-                    end.x
-                };
-                let visual_end_x = visual_end_x.max(px(6.));
-
-                left = Some(left.map_or(px(0.), |left| left.min(px(0.))));
-                right = Some(right.map_or(visual_end_x, |right| right.max(visual_end_x)));
-                top = Some(top.map_or(visual_top, |top| top.min(visual_top)));
-                bottom = Some(bottom.map_or(visual_top + line_height, |bottom| {
-                    bottom.max(visual_top + line_height)
-                }));
-            }
-
-            if range.end <= line_end {
-                break;
-            }
-
-            offset_y += line.size(line_height).height;
-        }
-
-        let (Some(left), Some(right), Some(top), Some(bottom)) = (left, right, top, bottom) else {
-            return None;
-        };
-
-        let origin = bounds.origin + point(line_number_width, px(0.));
-        let mut builder = gpui::PathBuilder::stroke(stroke_width);
-        builder.move_to(origin + point(left, top));
-        builder.line_to(origin + point(right, top));
-        builder.line_to(origin + point(right, bottom));
-        builder.line_to(origin + point(left, bottom));
-        builder.close();
         builder.build().ok()
     }
 
@@ -833,7 +810,7 @@ impl TextElement {
             }
 
             if let Some(border) = decoration.border {
-                if let Some(path) = Self::layout_match_range_rect(
+                if let Some(path) = Self::layout_match_range_outline(
                     decoration.range.clone(),
                     last_layout,
                     bounds,
