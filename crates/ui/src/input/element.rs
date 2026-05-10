@@ -523,6 +523,92 @@ impl TextElement {
         Self::layout_match_range_path(range, last_layout, bounds, Some(stroke_width))
     }
 
+    fn layout_match_range_underline(
+        range: Range<usize>,
+        last_layout: &LastLayout,
+        bounds: &Bounds<Pixels>,
+        wavy: bool,
+    ) -> Option<Path<Pixels>> {
+        if range.is_empty()
+            || range.start < last_layout.visible_range_offset.start
+            || range.end > last_layout.visible_range_offset.end
+        {
+            return None;
+        }
+
+        let path_origin = bounds.origin + point(last_layout.line_number_width, px(0.));
+        let mut builder = gpui::PathBuilder::stroke(px(1.));
+        let mut drew = false;
+        let mut offset_y = last_layout.visible_top;
+
+        for (prev_lines_offset, line) in last_layout
+            .visible_line_byte_offsets
+            .iter()
+            .zip(last_layout.lines.iter())
+        {
+            let prev_lines_offset = *prev_lines_offset;
+            let line_size = line.size(last_layout.line_height);
+            let line_origin = point(px(0.), offset_y);
+
+            let line_cursor_start = line.position_for_index(
+                range.start.saturating_sub(prev_lines_offset),
+                last_layout,
+                false,
+            );
+            let line_cursor_end = line.position_for_index(
+                range.end.saturating_sub(prev_lines_offset),
+                last_layout,
+                false,
+            );
+
+            if line_cursor_start.is_some() || line_cursor_end.is_some() {
+                let start = line_cursor_start
+                    .unwrap_or_else(|| line.position_for_index(0, last_layout, false).unwrap());
+                let end = line_cursor_end.unwrap_or_else(|| {
+                    line.position_for_index(line.len(), last_layout, false)
+                        .unwrap()
+                });
+                let wrapped_lines = (end.y / last_layout.line_height).ceil() as usize
+                    - (start.y / last_layout.line_height).ceil() as usize;
+
+                for ix in 0..=wrapped_lines {
+                    let y = start.y + ix as f32 * last_layout.line_height + last_layout.line_height
+                        - px(2.);
+                    let x1 = if ix == 0 { start.x } else { px(0.) };
+                    let x2 = if ix == wrapped_lines {
+                        end.x.max(x1 + px(6.))
+                    } else {
+                        line_size.width
+                    };
+                    let base = path_origin + line_origin;
+                    if wavy {
+                        let mut x = x1;
+                        let step = px(4.);
+                        builder.move_to(base + point(x, y));
+                        let mut up = true;
+                        while x < x2 {
+                            x = (x + step).min(x2);
+                            builder.line_to(base + point(x, y + if up { px(-2.) } else { px(0.) }));
+                            up = !up;
+                        }
+                    } else {
+                        builder.move_to(base + point(x1, y));
+                        builder.line_to(base + point(x2, y));
+                    }
+                    drew = true;
+                }
+            }
+
+            if line_cursor_start.is_some() && line_cursor_end.is_some() {
+                break;
+            }
+
+            offset_y += line_size.height;
+        }
+
+        drew.then(|| builder.build().ok()).flatten()
+    }
+
     fn layout_match_range_path(
         range: Range<usize>,
         last_layout: &LastLayout,
@@ -797,9 +883,14 @@ impl TextElement {
         decorations: &[InputDecoration],
         last_layout: &LastLayout,
         bounds: &Bounds<Pixels>,
-    ) -> (Vec<(Path<Pixels>, Hsla)>, Vec<(Path<Pixels>, Hsla)>) {
+    ) -> (
+        Vec<(Path<Pixels>, Hsla)>,
+        Vec<(Path<Pixels>, Hsla)>,
+        Vec<(Path<Pixels>, Hsla)>,
+    ) {
         let mut fills = Vec::with_capacity(decorations.len());
         let mut borders = Vec::with_capacity(decorations.len());
+        let mut underlines = Vec::with_capacity(decorations.len());
         for decoration in decorations {
             if let Some(fill) = decoration.fill {
                 if let Some(path) =
@@ -819,9 +910,20 @@ impl TextElement {
                     borders.push((path, border));
                 }
             }
+
+            if let Some(underline) = decoration.underline {
+                if let Some(path) = Self::layout_match_range_underline(
+                    decoration.range.clone(),
+                    last_layout,
+                    bounds,
+                    decoration.underline_wavy,
+                ) {
+                    underlines.push((path, underline));
+                }
+            }
         }
 
-        (fills, borders)
+        (fills, borders, underlines)
     }
 
     fn layout_selections(
@@ -1489,6 +1591,7 @@ pub(super) struct PrepaintState {
     search_match_paths: Vec<(Path<Pixels>, bool)>,
     decoration_fill_paths: Vec<(Path<Pixels>, Hsla)>,
     decoration_border_paths: Vec<(Path<Pixels>, Hsla)>,
+    decoration_underline_paths: Vec<(Path<Pixels>, Hsla)>,
     document_color_paths: Vec<(Path<Pixels>, Hsla)>,
     hover_definition_hitbox: Option<Hitbox>,
     indent_guides_path: Option<Path<Pixels>>,
@@ -1896,7 +1999,7 @@ impl Element for TextElement {
             self.layout_document_colors(&document_colors, &last_layout, &bounds, cx);
 
         let state = self.state.read(cx);
-        let (decoration_fill_paths, decoration_border_paths) =
+        let (decoration_fill_paths, decoration_border_paths, decoration_underline_paths) =
             self.layout_decorations(&state.decorations, &last_layout, &bounds);
         let line_numbers = if state.mode.line_number() {
             let mut line_numbers = Vec::with_capacity(last_layout.visible_buffer_lines.len());
@@ -1975,6 +2078,7 @@ impl Element for TextElement {
             search_match_paths,
             decoration_fill_paths,
             decoration_border_paths,
+            decoration_underline_paths,
             hover_highlight_path,
             hover_definition_hitbox,
             document_color_paths,
@@ -2180,6 +2284,10 @@ impl Element for TextElement {
         }
 
         for (path, color) in prepaint.decoration_border_paths.iter() {
+            window.paint_path(path.clone(), *color);
+        }
+
+        for (path, color) in prepaint.decoration_underline_paths.iter() {
             window.paint_path(path.clone(), *color);
         }
 
