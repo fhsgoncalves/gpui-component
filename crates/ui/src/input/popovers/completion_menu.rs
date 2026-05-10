@@ -6,9 +6,9 @@ use gpui::{
     Render, RenderOnce, SharedString, Styled, StyledText, Subscription, Window, deferred, div,
     prelude::FluentBuilder, px, relative,
 };
-use lsp_types::{CompletionItem, CompletionTextEdit};
+use lsp_types::{CompletionItem, CompletionItemKind, CompletionTextEdit};
 
-const MAX_MENU_WIDTH: Pixels = px(320.);
+const MAX_MENU_WIDTH: Pixels = px(720.);
 const MAX_MENU_HEIGHT: Pixels = px(240.);
 const POPOVER_GAP: Pixels = px(4.);
 
@@ -86,6 +86,8 @@ impl RenderOnce for CompletionMenuItem {
         let item = self.item;
 
         let deprecated = item.deprecated.unwrap_or(false);
+        let detail = completion_detail(&item);
+        let right = completion_right_metadata(&item);
         let matched_len = item
             .filter_text
             .as_ref()
@@ -105,6 +107,7 @@ impl RenderOnce for CompletionMenuItem {
             .id(self.ix)
             .gap_2()
             .p_1()
+            .w_full()
             .text_xs()
             .line_height(relative(1.))
             .rounded(cx.theme().radius.half())
@@ -114,16 +117,81 @@ impl RenderOnce for CompletionMenuItem {
                 this.bg(cx.theme().accent)
                     .text_color(cx.theme().accent_foreground)
             })
-            .child(div().child(StyledText::new(item.label.clone()).with_highlights(highlights)))
-            .when(item.detail.is_some(), |this| {
+            .child(
+                div()
+                    .flex_none()
+                    .w_4()
+                    .text_center()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(completion_kind_label(item.kind)),
+            )
+            .child(
+                h_flex()
+                    .gap_2()
+                    .min_w_0()
+                    .flex_1()
+                    .child(
+                        div()
+                            .min_w_0()
+                            .child(StyledText::new(item.label.clone()).with_highlights(highlights)),
+                    )
+                    .when_some(detail, |this, detail| {
+                        this.child(
+                            Label::new(detail)
+                                .text_color(cx.theme().muted_foreground)
+                                .when(deprecated, |this| this.line_through())
+                                .italic(),
+                        )
+                    }),
+            )
+            .when_some(right, |this, right| {
                 this.child(
-                    Label::new(item.detail.as_deref().unwrap_or("").to_string())
+                    Label::new(right)
+                        .flex_none()
                         .text_color(cx.theme().muted_foreground)
-                        .when(deprecated, |this| this.line_through())
-                        .italic(),
+                        .when(deprecated, |this| this.line_through()),
                 )
             })
             .children(self.children)
+    }
+}
+
+fn completion_detail(item: &CompletionItem) -> Option<String> {
+    item.label_details
+        .as_ref()
+        .and_then(|details| details.detail.clone())
+        .or_else(|| {
+            item.data
+                .as_ref()
+                .and_then(|data| data.get("detail"))
+                .and_then(|value| value.as_str())
+                .map(ToString::to_string)
+        })
+        .or_else(|| item.detail.clone())
+}
+
+fn completion_right_metadata(item: &CompletionItem) -> Option<String> {
+    item.label_details
+        .as_ref()
+        .and_then(|details| details.description.clone())
+        .or_else(|| {
+            item.data
+                .as_ref()
+                .and_then(|data| data.get("right"))
+                .and_then(|value| value.as_str())
+                .map(ToString::to_string)
+        })
+}
+
+fn completion_kind_label(kind: Option<CompletionItemKind>) -> &'static str {
+    match kind {
+        Some(CompletionItemKind::FIELD) => "C",
+        Some(CompletionItemKind::FUNCTION) | Some(CompletionItemKind::METHOD) => "F",
+        Some(CompletionItemKind::CLASS) | Some(CompletionItemKind::STRUCT) => "T",
+        Some(CompletionItemKind::MODULE) => "S",
+        Some(CompletionItemKind::KEYWORD) => "K",
+        Some(CompletionItemKind::VARIABLE) => "A",
+        _ => "",
     }
 }
 
@@ -282,7 +350,9 @@ impl CompletionMenu {
         }
 
         cx.propagate();
-        if action.partial_eq(&input::Enter { secondary: false }) {
+        if action.partial_eq(&input::Enter { secondary: false })
+            || action.partial_eq(&input::IndentInline)
+        {
             self.on_action_enter(window, cx);
         } else if action.partial_eq(&input::Escape) {
             self.on_action_escape(window, cx);

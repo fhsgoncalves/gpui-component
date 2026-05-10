@@ -18,7 +18,6 @@ use std::cell::Cell;
 use std::ops::Range;
 use std::rc::Rc;
 use sum_tree::Bias;
-use unicode_segmentation::*;
 
 use super::{
     DisplayMap, MASK_CHAR,
@@ -116,6 +115,8 @@ pub struct InputDecoration {
     pub fill: Option<Hsla>,
     pub border: Option<Hsla>,
     pub border_width: Pixels,
+    pub underline: Option<Hsla>,
+    pub underline_wavy: bool,
 }
 
 pub(crate) fn init(cx: &mut App) {
@@ -1080,13 +1081,9 @@ impl InputState {
     pub(super) fn previous_start_of_word(&mut self) -> usize {
         let offset = self.selected_range.start;
         let offset = self.offset_from_utf16(self.offset_to_utf16(offset));
-        // FIXME: Avoid to_string
         let left_part = self.text.slice(0..offset).to_string();
 
-        UnicodeSegmentation::split_word_bound_indices(left_part.as_str())
-            .rfind(|(_, s)| !s.trim_start().is_empty())
-            .map(|(i, _)| i)
-            .unwrap_or(0)
+        previous_editor_word_boundary(&left_part)
     }
 
     /// Return the next end offset of the next word.
@@ -1095,10 +1092,7 @@ impl InputState {
         let offset = self.offset_from_utf16(self.offset_to_utf16(offset));
         let right_part = self.text.slice(offset..self.text.len()).to_string();
 
-        UnicodeSegmentation::split_word_bound_indices(right_part.as_str())
-            .find(|(_, s)| !s.trim_start().is_empty())
-            .map(|(i, s)| offset + i + s.len())
-            .unwrap_or(self.text.len())
+        offset + next_editor_word_boundary(&right_part).unwrap_or(right_part.len())
     }
 
     /// Get start of line byte offset of cursor.
@@ -2613,6 +2607,60 @@ impl Render for InputState {
             .children(self.context_menu_content.as_ref().map(|menu| menu.render()))
             .children(self.hover_popover.clone())
     }
+}
+
+fn previous_editor_word_boundary(text: &str) -> usize {
+    let end = text
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| !ch.is_whitespace())
+        .map(|(ix, ch)| ix + ch.len_utf8())
+        .unwrap_or(0);
+    if end == 0 {
+        return 0;
+    }
+
+    let Some((last_ix, last_ch)) = text[..end].char_indices().next_back() else {
+        return 0;
+    };
+
+    if is_editor_word_char(last_ch) {
+        let mut start = last_ix;
+        for (ix, ch) in text[..last_ix].char_indices().rev() {
+            if is_editor_word_char(ch) {
+                start = ix;
+            } else {
+                break;
+            }
+        }
+        return start;
+    }
+
+    last_ix
+}
+
+fn next_editor_word_boundary(text: &str) -> Option<usize> {
+    let start = text
+        .char_indices()
+        .find(|(_, ch)| !ch.is_whitespace())
+        .map(|(ix, _)| ix)?;
+    let first = text[start..].chars().next()?;
+    if !is_editor_word_char(first) {
+        return Some(start + first.len_utf8());
+    }
+
+    let mut end = start + first.len_utf8();
+    for ch in text[end..].chars() {
+        if !is_editor_word_char(ch) {
+            break;
+        }
+        end += ch.len_utf8();
+    }
+    Some(end)
+}
+
+fn is_editor_word_char(ch: char) -> bool {
+    ch == '_' || ch.is_alphanumeric()
 }
 
 #[cfg(test)]
