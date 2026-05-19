@@ -1878,6 +1878,14 @@ impl InputState {
         cx.notify()
     }
 
+    /// Sets the selection range.
+    ///
+    /// This is useful for programmatically selecting text before operations like `replace()`.
+    pub fn set_selected_range(&mut self, range: std::ops::Range<usize>, cx: &mut Context<Self>) {
+        self.selected_range = range.into();
+        cx.notify()
+    }
+
     #[inline]
     pub(super) fn offset_from_utf16(&self, offset: usize) -> usize {
         self.text.offset_utf16_to_offset(offset)
