@@ -490,16 +490,23 @@ impl TextElement {
         last_layout: &LastLayout,
         bounds: &Bounds<Pixels>,
     ) -> Option<Path<Pixels>> {
-        Self::layout_match_range_path(range, last_layout, bounds, None)
+        Self::layout_match_range_path(range, last_layout, bounds, None, None)
     }
 
     fn layout_match_range_outline(
         range: Range<usize>,
         last_layout: &LastLayout,
         bounds: &Bounds<Pixels>,
+        viewport_bounds: &Bounds<Pixels>,
         stroke_width: Pixels,
     ) -> Option<Path<Pixels>> {
-        Self::layout_match_range_path(range, last_layout, bounds, Some(stroke_width))
+        Self::layout_match_range_path(
+            range,
+            last_layout,
+            bounds,
+            Some(stroke_width),
+            Some(viewport_bounds),
+        )
     }
 
     fn layout_match_range_underline(
@@ -508,12 +515,7 @@ impl TextElement {
         bounds: &Bounds<Pixels>,
         wavy: bool,
     ) -> Option<Path<Pixels>> {
-        if range.is_empty()
-            || range.start < last_layout.visible_range_offset.start
-            || range.end > last_layout.visible_range_offset.end
-        {
-            return None;
-        }
+        let range = Self::visible_range_intersection(range, last_layout)?;
 
         let path_origin = bounds.origin + point(last_layout.line_number_width, px(0.));
         let mut builder = gpui::PathBuilder::stroke(px(1.));
@@ -593,16 +595,11 @@ impl TextElement {
         last_layout: &LastLayout,
         bounds: &Bounds<Pixels>,
         stroke_width: Option<Pixels>,
+        viewport_bounds: Option<&Bounds<Pixels>>,
     ) -> Option<Path<Pixels>> {
-        if range.is_empty() {
-            return None;
-        }
-
-        if range.start < last_layout.visible_range_offset.start
-            || range.end > last_layout.visible_range_offset.end
-        {
-            return None;
-        }
+        let mut is_clipped_at_start = range.start < last_layout.visible_range_offset.start;
+        let mut is_clipped_at_end = range.end > last_layout.visible_range_offset.end;
+        let range = Self::visible_range_intersection(range, last_layout)?;
 
         let line_height = last_layout.line_height;
         let visible_top = last_layout.visible_top;
@@ -615,6 +612,8 @@ impl TextElement {
         // Start from visible_top (which already accounts for all lines before visible range)
         let mut offset_y = visible_top;
         let mut line_corners = vec![];
+        let mut saw_range_start = false;
+        let mut saw_range_end = false;
 
         // Iterate only over visible (non-hidden) buffer lines
         for (prev_lines_offset, line) in last_layout
@@ -660,12 +659,18 @@ impl TextElement {
                 // Ensure at least 6px width for the selection for empty lines.
                 end_x = end_x.max(start.x + px(6.));
 
-                line_corners.push(Corners {
+                let corners = Corners {
                     top_left: line_origin + point(start.x, start.y),
                     top_right: line_origin + point(end_x, start.y),
                     bottom_left: line_origin + point(start.x, start.y + line_height),
                     bottom_right: line_origin + point(end_x, start.y + line_height),
-                });
+                };
+
+                if Self::line_corners_intersect_viewport(&corners, bounds, viewport_bounds) {
+                    saw_range_start |= line_cursor_start.is_some();
+                    saw_range_end |= line_cursor_end.is_some() && wrapped_lines == 0;
+                    line_corners.push(corners);
+                }
 
                 // wrapped lines
                 for i in 1..=wrapped_lines {
@@ -675,12 +680,17 @@ impl TextElement {
                         end.x = line_size.width;
                     }
 
-                    line_corners.push(Corners {
+                    let corners = Corners {
                         top_left: line_origin + point(start.x, start.y),
                         top_right: line_origin + point(end.x, start.y),
                         bottom_left: line_origin + point(start.x, start.y + line_height),
                         bottom_right: line_origin + point(end.x, start.y + line_height),
-                    });
+                    };
+
+                    if Self::line_corners_intersect_viewport(&corners, bounds, viewport_bounds) {
+                        saw_range_end |= line_cursor_end.is_some() && i == wrapped_lines;
+                        line_corners.push(corners);
+                    }
                 }
             }
 
@@ -694,6 +704,11 @@ impl TextElement {
         let mut points = vec![];
         if line_corners.is_empty() {
             return None;
+        }
+
+        if stroke_width.is_some() {
+            is_clipped_at_start |= !saw_range_start;
+            is_clipped_at_end |= !saw_range_end;
         }
 
         // Fix corners to make sure the left to right direction
@@ -712,7 +727,7 @@ impl TextElement {
 
             let last_ix = line_corners.len() - 1;
             for (ix, corners) in line_corners.iter_mut().enumerate() {
-                if ix < last_ix {
+                if ix < last_ix || is_clipped_at_end {
                     corners.top_right.x = max_right;
                     corners.bottom_right.x = max_right;
                 }
@@ -720,47 +735,50 @@ impl TextElement {
         }
 
         if let Some(stroke_width) = stroke_width {
-            let mut points = Vec::new();
             let first = line_corners.first().unwrap();
-            points.push(first.top_left);
-            points.push(first.top_right);
+            let path_origin = bounds.origin + point(line_number_width, px(0.));
+            let mut builder = gpui::PathBuilder::stroke(stroke_width);
+
+            builder.move_to(path_origin + first.top_right);
 
             for ix in 0..line_corners.len() {
                 let corners = &line_corners[ix];
-                points.push(corners.bottom_right);
+                builder.line_to(path_origin + corners.bottom_right);
 
                 if let Some(next) = line_corners.get(ix + 1) {
                     if next.top_right.x != corners.bottom_right.x {
-                        points.push(point(next.top_right.x, corners.bottom_right.y));
+                        builder
+                            .line_to(path_origin + point(next.top_right.x, corners.bottom_right.y));
                     }
-                    points.push(next.top_right);
+                    builder.line_to(path_origin + next.top_right);
                 }
             }
 
             let last = line_corners.last().unwrap();
-            points.push(last.bottom_left);
+            if is_clipped_at_end {
+                builder.move_to(path_origin + last.bottom_left);
+            } else {
+                builder.line_to(path_origin + last.bottom_left);
+            }
 
             for ix in (0..line_corners.len()).rev() {
                 let corners = &line_corners[ix];
-                points.push(corners.top_left);
+                builder.line_to(path_origin + corners.top_left);
 
                 if ix > 0 {
                     let previous = &line_corners[ix - 1];
                     if previous.bottom_left.x != corners.top_left.x {
-                        points.push(point(previous.bottom_left.x, corners.top_left.y));
+                        builder.line_to(
+                            path_origin + point(previous.bottom_left.x, corners.top_left.y),
+                        );
                     }
-                    points.push(previous.bottom_left);
+                    builder.line_to(path_origin + previous.bottom_left);
                 }
             }
 
-            let path_origin = bounds.origin + point(line_number_width, px(0.));
-            let first_p = *points.first().unwrap();
-            let mut builder = gpui::PathBuilder::stroke(stroke_width);
-            builder.move_to(path_origin + first_p);
-            for p in points.iter().skip(1) {
-                builder.line_to(path_origin + *p);
+            if !is_clipped_at_start {
+                builder.line_to(path_origin + first.top_right);
             }
-            builder.close();
 
             return builder.build().ok();
         }
@@ -792,6 +810,32 @@ impl TextElement {
         }
 
         builder.build().ok()
+    }
+
+    fn visible_range_intersection(
+        range: Range<usize>,
+        last_layout: &LastLayout,
+    ) -> Option<Range<usize>> {
+        let start = range.start.max(last_layout.visible_range_offset.start);
+        let end = range.end.min(last_layout.visible_range_offset.end);
+
+        (start < end).then_some(start..end)
+    }
+
+    fn line_corners_intersect_viewport(
+        corners: &Corners<Point<Pixels>>,
+        bounds: &Bounds<Pixels>,
+        viewport_bounds: Option<&Bounds<Pixels>>,
+    ) -> bool {
+        let Some(viewport_bounds) = viewport_bounds else {
+            return true;
+        };
+
+        let top = bounds.origin.y + corners.top_left.y;
+        let bottom = bounds.origin.y + corners.bottom_left.y;
+
+        top < viewport_bounds.origin.y + viewport_bounds.size.height
+            && bottom > viewport_bounds.origin.y
     }
 
     fn layout_search_matches(
@@ -862,6 +906,7 @@ impl TextElement {
         decorations: &[InputDecoration],
         last_layout: &LastLayout,
         bounds: &Bounds<Pixels>,
+        viewport_bounds: &Bounds<Pixels>,
     ) -> (
         Vec<(Path<Pixels>, Hsla)>,
         Vec<(Path<Pixels>, Hsla)>,
@@ -884,6 +929,7 @@ impl TextElement {
                     decoration.range.clone(),
                     last_layout,
                     bounds,
+                    viewport_bounds,
                     decoration.border_width,
                 ) {
                     borders.push((path, border));
@@ -1965,7 +2011,7 @@ impl Element for TextElement {
 
         let state = self.state.read(cx);
         let (decoration_fill_paths, decoration_border_paths, decoration_underline_paths) =
-            self.layout_decorations(&state.decorations, &last_layout, &bounds);
+            self.layout_decorations(&state.decorations, &last_layout, &bounds, &input_bounds);
         let line_numbers = if state.mode.line_number() {
             let mut line_numbers = Vec::with_capacity(last_layout.visible_buffer_lines.len());
             let other_line_runs = vec![TextRun {
