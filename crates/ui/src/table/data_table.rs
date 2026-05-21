@@ -36,6 +36,8 @@ pub(super) struct TableOptions {
     pub(super) bordered: bool,
     /// The cell size of the table.
     pub(super) size: Size,
+    /// Whether the table should paint across the full available width.
+    pub(super) fill_width: bool,
 }
 
 impl Default for TableOptions {
@@ -45,6 +47,7 @@ impl Default for TableOptions {
             stripe: false,
             bordered: true,
             size: Size::default(),
+            fill_width: true,
         }
     }
 }
@@ -116,6 +119,15 @@ where
     pub fn scrollbar_visible(mut self, vertical: bool, horizontal: bool) -> Self {
         self.options.scrollbar_visible =
             Edges { right: vertical, bottom: horizontal, ..Default::default() };
+        self
+    }
+
+    /// Set whether the table should paint across the full available width.
+    ///
+    /// When disabled, the table paints only the width occupied by its visible columns
+    /// unless the columns are wider than the available viewport.
+    pub fn fill_width(mut self, fill_width: bool) -> Self {
+        self.options.fill_width = fill_width;
         self
     }
 }

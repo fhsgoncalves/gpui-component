@@ -579,6 +579,33 @@ where
         self.col_groups.iter().filter(|col| col.column.fixed == Some(ColumnFixed::Left)).count()
     }
 
+    fn row_selector_width(&self) -> Pixels {
+        if !self.cell_selectable {
+            return px(0.);
+        }
+
+        let padding = self.options.size.table_cell_padding();
+        px(12.) + padding.left + padding.right
+    }
+
+    fn content_width(&self) -> Pixels {
+        self.row_selector_width() + self.col_groups.iter().map(|col| col.width).sum::<Pixels>()
+    }
+
+    fn rendered_width(&self) -> Option<Pixels> {
+        if self.options.fill_width {
+            return None;
+        }
+
+        let content_width = self.content_width();
+        let available_width = self.bounds.size.width;
+        if available_width > px(0.) {
+            Some(content_width.min(available_width))
+        } else {
+            Some(content_width)
+        }
+    }
+
     fn page_item_count(&self) -> usize {
         let row_height = self.options.size.table_row_height();
         let height = self.bounds.size.height;
@@ -1547,7 +1574,8 @@ where
                 // Columns
                 h_flex()
                     .id("table-head")
-                    .size_full()
+                    .h_full()
+                    .flex_1()
                     .overflow_scroll()
                     .relative()
                     .track_scroll(&horizontal_scroll_handle)
@@ -1587,7 +1615,9 @@ where
                                                 .sum();
                                             r.child(div().w(right_spacer).h_full().flex_shrink_0())
                                         })
-                                        .child(self.delegate.render_last_empty_col(window, cx))
+                                        .when(self.options.fill_width, |r| {
+                                            r.child(self.delegate.render_last_empty_col(window, cx))
+                                        })
                                     } else {
                                         // Group header rows have far fewer cells (one per group),
                                         // so the cost of rendering all of them is negligible.
@@ -1616,7 +1646,9 @@ where
                                             }
                                             None
                                         }))
-                                        .child(self.delegate.render_last_empty_col(window, cx))
+                                        .when(self.options.fill_width, |r| {
+                                            r.child(self.delegate.render_last_empty_col(window, cx))
+                                        })
                                     }
                                 })
                         }))
@@ -1874,7 +1906,9 @@ where
                             )
                             .with_scroll_handle(&self.horizontal_scroll_handle),
                         )
-                        .child(self.delegate.render_last_empty_col(window, cx)),
+                        .when(self.options.fill_width, |this| {
+                            this.child(self.delegate.render_last_empty_col(window, cx))
+                        }),
                 )
                 // Row selected style
                 // Note: Don't show row selection if a cell is selected
@@ -1946,7 +1980,9 @@ where
                         .left(horizontal_scroll_handle.offset().x)
                         .child(self.render_cell(None, col_ix, window, cx))
                 }))
-                .child(self.delegate.render_last_empty_col(window, cx))
+                .when(self.options.fill_width, |this| {
+                    this.child(self.delegate.render_last_empty_col(window, cx))
+                })
         }
     }
 
@@ -2072,6 +2108,7 @@ where
             if self.options.stripe { rows_count + extra_rows_count } else { rows_count };
         let right_clicked_row = self.right_clicked_row;
         let is_filled = total_height > Pixels::ZERO && total_height <= actual_height;
+        let rendered_width = self.rendered_width();
 
         let loading_view = if loading {
             Some(self.delegate.render_loading(self.options.size, window, cx).into_any_element())
@@ -2087,7 +2124,9 @@ where
 
         let inner_table = v_flex()
             .id("table-inner")
-            .size_full()
+            .h_full()
+            .when_some(rendered_width, |this, width| this.w(width))
+            .when(rendered_width.is_none(), |this| this.w_full())
             .overflow_hidden()
             .child(self.render_table_header(left_columns_count, window, cx))
             .context_menu({
