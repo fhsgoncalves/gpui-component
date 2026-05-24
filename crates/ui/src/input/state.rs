@@ -119,6 +119,21 @@ pub struct InputDecoration {
     pub underline_wavy: bool,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct InputGutterAdornment {
+    pub line: usize,
+    pub icon_path: SharedString,
+    pub color: Hsla,
+    pub spin: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct InputInlineAdornment {
+    pub offset: usize,
+    pub text: SharedString,
+    pub color: Hsla,
+}
+
 pub(crate) fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("backspace", Backspace, Some(CONTEXT)),
@@ -353,6 +368,8 @@ pub struct InputState {
     pub(super) editor_scrollbar_paddings: Cell<Edges<Pixels>>,
     pub(super) editor_scrollbar_snapshot: Cell<Option<EditorScrollbarSnapshot>>,
     pub(super) decorations: Vec<InputDecoration>,
+    pub(super) gutter_adornments: Vec<InputGutterAdornment>,
+    pub(super) inline_adornments: Vec<InputInlineAdornment>,
     pub(super) text_align: TextAlign,
 
     /// The mask pattern for formatting the input text
@@ -473,6 +490,8 @@ impl InputState {
             }),
             editor_scrollbar_snapshot: Cell::new(None),
             decorations: Vec::new(),
+            gutter_adornments: Vec::new(),
+            inline_adornments: Vec::new(),
             deferred_scroll_offset: None,
             preferred_column: None,
             placeholder: SharedString::default(),
@@ -680,6 +699,23 @@ impl InputState {
         }
 
         self.decorations = decorations;
+        cx.notify();
+    }
+
+    pub fn set_adornments(
+        &mut self,
+        gutter_adornments: Vec<InputGutterAdornment>,
+        inline_adornments: Vec<InputInlineAdornment>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.gutter_adornments == gutter_adornments
+            && self.inline_adornments == inline_adornments
+        {
+            return;
+        }
+
+        self.gutter_adornments = gutter_adornments;
+        self.inline_adornments = inline_adornments;
         cx.notify();
     }
 
