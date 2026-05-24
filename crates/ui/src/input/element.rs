@@ -15,13 +15,17 @@ use smallvec::SmallVec;
 use std::{ops::Range, rc::Rc};
 
 use crate::{
-    ActiveTheme as _, Colorize, IconName, Root, Selectable, Sizable as _,
+    ActiveTheme as _, Colorize, Icon, IconName, Root, Selectable, Sizable as _,
     button::{Button, ButtonVariants as _},
     input::{RopeExt as _, blink_cursor::CURSOR_WIDTH, display_map::LineLayout},
     scroll::Scrollbar,
+    spinner::Spinner,
 };
 
-use super::{InputDecoration, InputState, LastLayout, WhitespaceIndicators, mode::InputMode};
+use super::{
+    InputDecoration, InputGutterAdornment, InputInlineAdornment, InputState, LastLayout,
+    WhitespaceIndicators, mode::InputMode,
+};
 
 const BOTTOM_MARGIN_ROWS: usize = 3;
 pub(super) const RIGHT_MARGIN: Pixels = px(10.);
@@ -972,6 +976,58 @@ impl TextElement {
         (fills, borders, underlines)
     }
 
+    fn layout_inline_adornments(
+        &self,
+        adornments: &[InputInlineAdornment],
+        last_layout: &LastLayout,
+        text_size: Pixels,
+        text_style: &TextStyle,
+        window: &mut Window,
+    ) -> Vec<(Point<Pixels>, ShapedLine)> {
+        let mut layouts = Vec::with_capacity(adornments.len());
+        let adornment_font = text_style.font();
+        let mut offset_y = last_layout.visible_top;
+
+        for (line, &line_start) in last_layout
+            .lines
+            .iter()
+            .zip(last_layout.visible_line_byte_offsets.iter())
+        {
+            let line_height = line.size(last_layout.line_height).height;
+            let line_end = line_start + line.len();
+
+            for adornment in adornments {
+                if adornment.offset < line_start || adornment.offset > line_end {
+                    continue;
+                }
+
+                let local_offset = adornment.offset - line_start;
+                let Some(pos) = line.position_for_index(local_offset, last_layout, false) else {
+                    continue;
+                };
+                let run = TextRun {
+                    len: adornment.text.len(),
+                    font: adornment_font.clone(),
+                    color: adornment.color,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                };
+                let shaped = window.text_system().shape_line(
+                    adornment.text.clone(),
+                    text_size,
+                    &[run],
+                    None,
+                );
+                layouts.push((point(pos.x + px(8.), offset_y + pos.y), shaped));
+            }
+
+            offset_y += line_height;
+        }
+
+        layouts
+    }
+
     fn layout_selections(
         &self,
         last_layout: &LastLayout,
@@ -1392,6 +1448,79 @@ impl TextElement {
         icon_layout
     }
 
+    fn layout_gutter_adornments(
+        &self,
+        origin_x: Pixels,
+        bounds: &Bounds<Pixels>,
+        last_layout: &LastLayout,
+        adornments: &[InputGutterAdornment],
+        window: &mut Window,
+        cx: &mut App,
+    ) -> GutterAdornmentLayout {
+        let mut icons = Vec::new();
+        if adornments.is_empty() {
+            return GutterAdornmentLayout { icons };
+        }
+
+        let line_height = last_layout.line_height;
+        let icon_size = px(14.);
+        let line_number_width =
+            last_layout.line_number_width - LINE_NUMBER_RIGHT_MARGIN - FOLD_ICON_HITBOX_WIDTH;
+        let icon_x = origin_x + (line_number_width - icon_size).max(px(0.)).half();
+        let mut offset_y = last_layout.visible_top;
+
+        for (line, &buffer_line) in last_layout
+            .lines
+            .iter()
+            .zip(last_layout.visible_buffer_lines.iter())
+        {
+            for adornment in adornments
+                .iter()
+                .filter(|adornment| adornment.line == buffer_line)
+            {
+                let icon_bounds = Bounds::new(
+                    point(
+                        icon_x,
+                        bounds.origin.y + offset_y + (line_height - icon_size).half(),
+                    ),
+                    size(icon_size, icon_size),
+                );
+
+                let mut icon = if adornment.spin {
+                    Spinner::new()
+                        .icon(Icon::default().path(adornment.icon_path.clone()))
+                        .color(adornment.color)
+                        .xsmall()
+                        .into_any_element()
+                } else {
+                    Icon::default()
+                        .path(adornment.icon_path.clone())
+                        .xsmall()
+                        .text_color(adornment.color)
+                        .into_any_element()
+                };
+
+                icon.prepaint_as_root(icon_bounds.origin, icon_bounds.size.into(), window, cx);
+                icons.push(icon);
+            }
+
+            offset_y += line.size(line_height).height;
+        }
+
+        GutterAdornmentLayout { icons }
+    }
+
+    fn paint_gutter_adornments(
+        &mut self,
+        gutter_adornment_layout: &mut GutterAdornmentLayout,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        for icon in gutter_adornment_layout.icons.iter_mut() {
+            icon.paint(window, cx);
+        }
+    }
+
     /// Paint fold icons using prepaint hitboxes.
     ///
     /// This handles:
@@ -1638,6 +1767,8 @@ pub(super) struct PrepaintState {
     decoration_fill_paths: Vec<(Path<Pixels>, Hsla)>,
     decoration_border_paths: Vec<(Path<Pixels>, Hsla)>,
     decoration_underline_paths: Vec<(Path<Pixels>, Hsla)>,
+    gutter_adornment_layout: GutterAdornmentLayout,
+    inline_adornments: Vec<(Point<Pixels>, ShapedLine)>,
     document_color_paths: Vec<(Path<Pixels>, Hsla)>,
     hover_definition_hitbox: Option<Hitbox>,
     indent_guides_path: Option<Path<Pixels>>,
@@ -1650,6 +1781,10 @@ pub(super) struct PrepaintState {
     /// First line of inline completion (painted after cursor on same line)
     ghost_first_line: Option<ShapedLine>,
     ghost_lines_height: Pixels,
+}
+
+struct GutterAdornmentLayout {
+    icons: Vec<AnyElement>,
 }
 
 impl PrepaintState {
@@ -2045,8 +2180,16 @@ impl Element for TextElement {
             self.layout_document_colors(&document_colors, &last_layout, &bounds, cx);
 
         let state = self.state.read(cx);
+        let gutter_adornments = state.gutter_adornments.clone();
         let (decoration_fill_paths, decoration_border_paths, decoration_underline_paths) =
             self.layout_decorations(&state.decorations, &last_layout, &bounds, &input_bounds);
+        let inline_adornments = self.layout_inline_adornments(
+            &state.inline_adornments,
+            &last_layout,
+            text_size,
+            &text_style,
+            window,
+        );
         let line_numbers = if state.mode.line_number() {
             let mut line_numbers = Vec::with_capacity(last_layout.visible_buffer_lines.len());
             let other_line_runs = vec![TextRun {
@@ -2109,8 +2252,17 @@ impl Element for TextElement {
                 cursor_scroll_offset,
                 state,
             )));
+        let _ = state;
         let fold_icon_layout =
             self.layout_fold_icons(original_x, &bounds, &last_layout, window, cx);
+        let gutter_adornment_layout = self.layout_gutter_adornments(
+            original_x,
+            &bounds,
+            &last_layout,
+            &gutter_adornments,
+            window,
+            cx,
+        );
 
         PrepaintState {
             bounds,
@@ -2125,6 +2277,8 @@ impl Element for TextElement {
             decoration_fill_paths,
             decoration_border_paths,
             decoration_underline_paths,
+            gutter_adornment_layout,
+            inline_adornments,
             hover_highlight_path,
             hover_definition_hitbox,
             document_color_paths,
@@ -2329,6 +2483,14 @@ impl Element for TextElement {
             }
         }
 
+        for (relative_pos, line) in prepaint.inline_adornments.iter() {
+            let p = point(
+                origin.x + prepaint.last_layout.line_number_width + scroll_offset + relative_pos.x,
+                origin.y + relative_pos.y,
+            );
+            _ = line.paint(p, line_height, text_align, None, window, cx);
+        }
+
         for (path, color) in prepaint.decoration_border_paths.iter() {
             window.paint_path(path.clone(), *color);
         }
@@ -2405,6 +2567,7 @@ impl Element for TextElement {
             window,
             cx,
         );
+        self.paint_gutter_adornments(&mut prepaint.gutter_adornment_layout, window, cx);
 
         self.state.update(cx, |state, cx| {
             state.last_layout = Some(prepaint.last_layout.clone());
