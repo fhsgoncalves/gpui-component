@@ -32,6 +32,8 @@ pub(super) const RIGHT_MARGIN: Pixels = px(10.);
 pub(super) const LINE_NUMBER_RIGHT_MARGIN: Pixels = px(10.);
 const FOLD_ICON_WIDTH: Pixels = px(14.);
 const FOLD_ICON_HITBOX_WIDTH: Pixels = px(18.);
+const GUTTER_ADORNMENT_SPACING: Pixels = px(0.);
+const GUTTER_ADORNMENT_ICON_SIZE: Pixels = px(16.);
 const MAX_HIGHLIGHT_LINE_LENGTH: usize = 10_000;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1442,10 +1444,10 @@ impl TextElement {
         }
 
         let line_height = last_layout.line_height;
-        let icon_size = px(14.);
-        let line_number_width =
-            last_layout.line_number_width - LINE_NUMBER_RIGHT_MARGIN - FOLD_ICON_HITBOX_WIDTH;
-        let icon_x = origin_x + (line_number_width - icon_size).max(px(0.)).half();
+        let icon_size = GUTTER_ADORNMENT_ICON_SIZE;
+        let icon_x = origin_x + last_layout.line_number_width - LINE_NUMBER_RIGHT_MARGIN
+            - icon_size
+            + GUTTER_ADORNMENT_SPACING;
         let mut offset_y = last_layout.visible_top;
 
         for (line, &buffer_line) in last_layout
@@ -1457,24 +1459,19 @@ impl TextElement {
                 .iter()
                 .filter(|adornment| adornment.line == buffer_line)
             {
-                let icon_bounds = Bounds::new(
-                    point(
-                        icon_x,
-                        bounds.origin.y + offset_y + (line_height - icon_size).half(),
-                    ),
-                    size(icon_size, icon_size),
-                );
+                let icon_y = bounds.origin.y + offset_y + (line_height - icon_size).half();
+                let icon_bounds = Bounds::new(point(icon_x, icon_y), size(icon_size, icon_size));
 
                 let mut icon = if adornment.spin {
                     Spinner::new()
                         .icon(Icon::default().path(adornment.icon_path.clone()))
                         .color(adornment.color)
-                        .xsmall()
+                        .with_size(icon_size)
                         .into_any_element()
                 } else {
                     Icon::default()
                         .path(adornment.icon_path.clone())
-                        .xsmall()
+                        .with_size(icon_size)
                         .text_color(adornment.color)
                         .into_any_element()
                 };
@@ -1883,6 +1880,7 @@ impl Element for TextElement {
         let text = state.text.clone();
         let is_empty = text.len() == 0;
         let placeholder = self.placeholder.clone();
+        let gutter_adornments = state.gutter_adornments.clone();
 
         let text_style = window.text_style();
         let fg = text_style.color;
@@ -2145,7 +2143,6 @@ impl Element for TextElement {
             self.layout_document_colors(&document_colors, &last_layout, &bounds, cx);
 
         let state = self.state.read(cx);
-        let gutter_adornments = state.gutter_adornments.clone();
         let (decoration_fill_paths, decoration_border_paths, decoration_underline_paths) =
             self.layout_decorations(&state.decorations, &last_layout, &bounds, &input_bounds);
         let inline_adornments = self.layout_inline_adornments(
