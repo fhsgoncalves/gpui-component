@@ -238,6 +238,7 @@ impl ListDelegate for ContextMenuDelegate {
 /// A context menu for code completions and code actions.
 pub struct CompletionMenu {
     offset: usize,
+    anchor_offset: Option<usize>,
     editor: Entity<InputState>,
     list: Entity<ListState<ContextMenuDelegate>>,
     open: bool,
@@ -283,6 +284,7 @@ impl CompletionMenu {
 
             Self {
                 offset: 0,
+                anchor_offset: None,
                 editor,
                 list,
                 open: false,
@@ -398,6 +400,7 @@ impl CompletionMenu {
     /// Hide the completion menu and reset the trigger start offset.
     pub(crate) fn hide(&mut self, cx: &mut Context<Self>) {
         self.open = false;
+        self.anchor_offset = None;
         self.trigger_start_offset = None;
         cx.notify();
     }
@@ -410,6 +413,12 @@ impl CompletionMenu {
         self.query = query.into();
     }
 
+    pub(crate) fn reset_query(&mut self, start_offset: usize, query: impl Into<SharedString>) {
+        self.trigger_start_offset = Some(start_offset);
+        self.anchor_offset = None;
+        self.query = query.into();
+    }
+
     pub(crate) fn show(
         &mut self,
         offset: usize,
@@ -419,6 +428,9 @@ impl CompletionMenu {
     ) {
         let items = items.into();
         self.offset = offset;
+        if self.anchor_offset.is_none() {
+            self.anchor_offset = Some(offset);
+        }
         self.open = true;
         self.list.update(cx, |this, cx| {
             let longest_ix = items
@@ -444,14 +456,14 @@ impl CompletionMenu {
         let Some(last_layout) = editor.last_layout.as_ref() else {
             return None;
         };
-        let Some(cursor_origin) = last_layout.cursor_bounds.map(|b| b.origin) else {
-            return None;
-        };
-
-        let scroll_origin = self.editor.read(cx).scroll_handle.offset();
+        let anchor_offset = self.anchor_offset.unwrap_or(self.offset);
+        let anchor_origin = editor
+            .range_to_bounds(&(anchor_offset..anchor_offset))
+            .map(|bounds| bounds.origin)
+            .or_else(|| last_layout.cursor_bounds.map(|bounds| bounds.origin))?;
 
         Some(
-            scroll_origin + cursor_origin - editor.input_bounds.origin
+            anchor_origin - editor.input_bounds.origin
                 + Point::new(-px(4.), last_layout.line_height + px(4.)),
         )
     }
