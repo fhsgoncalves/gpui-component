@@ -1125,7 +1125,19 @@ impl Render for DockArea {
             .on_prepaint(move |bounds, _, cx| view.update(cx, |r, _| r.bounds = bounds))
             .map(|this| {
                 if let Some(zoom_view) = self.zoom_view.clone() {
-                    this.child(zoom_view)
+                    this.child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .h_full()
+                            .when_some(self.left_dock.clone(), |this, dock| {
+                                this.child(div().flex().flex_none().child(dock))
+                            })
+                            .child(div().flex().flex_1().overflow_hidden().child(zoom_view))
+                            .when_some(self.right_dock.clone(), |this, dock| {
+                                this.child(div().flex().flex_none().child(dock))
+                            }),
+                    )
                 } else {
                     match &self.center {
                         DockItem::Tiles { view, .. } => {
