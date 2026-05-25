@@ -145,7 +145,9 @@ impl InputState {
             }
         };
 
-        let start_offset = menu.read(cx).trigger_start_offset.unwrap_or(start);
+        let new_context_start = new_completion_context_start(new_text, new_offset);
+        let start_offset = new_context_start
+            .unwrap_or_else(|| menu.read(cx).trigger_start_offset.unwrap_or(start));
         if new_offset < start_offset {
             return;
         }
@@ -160,7 +162,11 @@ impl InputState {
             .map(|s| s.trim().to_string())
             .unwrap_or_default();
         _ = menu.update(cx, |menu, _| {
-            menu.update_query(start_offset, query.clone());
+            if new_context_start.is_some() {
+                menu.reset_query(start_offset, query.clone());
+            } else {
+                menu.update_query(start_offset, query.clone());
+            }
         });
 
         let completion_context = CompletionContext {
@@ -307,4 +313,11 @@ impl InputState {
         self.replace_text_in_range_silent(Some(range_utf16), &completion_text, window, cx);
         true
     }
+}
+
+fn new_completion_context_start(new_text: &str, new_offset: usize) -> Option<usize> {
+    new_text
+        .char_indices()
+        .rfind(|(_, ch)| !ch.is_alphanumeric() && *ch != '_')
+        .map(|(ix, ch)| new_offset - new_text[ix + ch.len_utf8()..].len())
 }
