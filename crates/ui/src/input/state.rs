@@ -1757,13 +1757,24 @@ impl InputState {
     }
 
     pub(super) fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_range.is_empty() {
+        let range = if self.selected_range.is_empty() {
+            let cursor = self.cursor();
+            let row = self.text.offset_to_point(cursor).row;
+            let start = self.text.line_start_offset(row);
+            let end = self.text.line_start_offset(row + 1);
+            start..end
+        } else {
+            self.selected_range.into()
+        };
+
+        if range.is_empty() {
             return;
         }
 
-        let selected_text = self.text.slice(self.selected_range).to_string();
+        let selected_text = self.text.slice(range.clone()).to_string();
         cx.write_to_clipboard(ClipboardItem::new_string(selected_text));
 
+        self.selected_range = range.into();
         self.replace_text_in_range_silent(None, "", window, cx);
     }
 
