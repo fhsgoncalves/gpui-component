@@ -419,7 +419,7 @@ where
         let mut measured_size = MeasuredEntrySize::default();
 
         // Measure the item_height and section header/footer height.
-        let available_space = size(AvailableSpace::MinContent, AvailableSpace::MinContent);
+        let available_space = size(AvailableSpace::MaxContent, AvailableSpace::MinContent);
         measured_size.item_size = self
             .render_list_item(self.item_to_measure_index, window, cx)
             .into_any_element()

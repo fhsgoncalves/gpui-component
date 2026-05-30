@@ -416,6 +416,28 @@ impl Element for VirtualList {
                                 })
                                 .collect::<Vec<_>>();
 
+                            let max_item_size = if self.axis.is_horizontal() {
+                                let max_height = self.item_sizes
+                                    .iter()
+                                    .map(|size| size.height)
+                                    .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                                    .unwrap_or(px(0.));
+                                Size {
+                                    width: px(0.),
+                                    height: max_height,
+                                }
+                            } else {
+                                let max_width = self.item_sizes
+                                    .iter()
+                                    .map(|size| size.width)
+                                    .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                                    .unwrap_or(px(0.));
+                                Size {
+                                    width: max_width,
+                                    height: px(0.),
+                                }
+                            };
+
                             state.content_size = if self.axis.is_horizontal() {
                                 Size {
                                     width: px(state
@@ -423,11 +445,11 @@ impl Element for VirtualList {
                                         .iter()
                                         .map(|size| size.as_f32())
                                         .sum::<f32>()),
-                                    height: longest_item_size.height,
+                                    height: max_item_size.height.max(longest_item_size.height),
                                 }
                             } else {
                                 Size {
-                                    width: longest_item_size.width,
+                                    width: max_item_size.width.max(longest_item_size.width),
                                     height: px(state
                                         .sizes
                                         .iter()
