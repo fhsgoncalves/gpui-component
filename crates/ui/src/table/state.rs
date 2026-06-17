@@ -2177,9 +2177,17 @@ where
             .context_menu({
                 let view = cx.entity().clone();
                 move |this, window: &mut Window, cx: &mut Context<PopupMenu>| {
-                    if let Some(row_ix) = view.read(cx).right_clicked_row {
-                        view.update(cx, |menu, cx| {
-                            menu.delegate_mut().context_menu(row_ix, this, window, cx)
+                    let clicked_cell = view.read(cx).right_clicked_cell;
+                    let clicked_row = view.read(cx).right_clicked_row;
+                    if let Some((row_ix, col_ix)) = clicked_cell {
+                        view.update(cx, |table, cx| {
+                            table
+                                .delegate_mut()
+                                .context_menu_for_cell(row_ix, col_ix, this, window, cx)
+                        })
+                    } else if let Some(row_ix) = clicked_row {
+                        view.update(cx, |table, cx| {
+                            table.delegate_mut().context_menu(row_ix, this, window, cx)
                         })
                     } else {
                         this
