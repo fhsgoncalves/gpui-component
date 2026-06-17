@@ -1865,6 +1865,12 @@ impl InputState {
         self.selected_range.into()
     }
 
+    /// Returns the UTF-8 byte offset nearest to a mouse position in the last
+    /// laid-out editor viewport.
+    pub fn offset_for_mouse_position(&self, position: Point<Pixels>) -> usize {
+        self.index_for_mouse_position(position)
+    }
+
     pub(crate) fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
         // If the text is empty, always return 0
         if self.text.len() == 0 {
