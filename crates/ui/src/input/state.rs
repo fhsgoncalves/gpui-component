@@ -130,6 +130,7 @@ pub(super) const CONTEXT: &str = "Input";
 pub struct InputDecoration {
     pub range: Range<usize>,
     pub fill: Option<Hsla>,
+    pub text_color: Option<Hsla>,
     pub border: Option<Hsla>,
     pub border_width: Pixels,
     pub underline: Option<Hsla>,

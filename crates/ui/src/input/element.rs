@@ -1719,6 +1719,21 @@ impl TextElement {
         }
 
         let diagnostic_styles = diagnostics.styles_for_range(&visible_byte_range, cx);
+        let decoration_styles = state
+            .decorations
+            .iter()
+            .filter_map(|decoration| {
+                decoration.text_color.map(|color| {
+                    (
+                        decoration.range.clone(),
+                        HighlightStyle {
+                            color: Some(color),
+                            ..Default::default()
+                        },
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
 
         // Range semantic tokens, resolved from the LSP provider's cached
         // result through the active highlight theme so it shares the same
@@ -1739,6 +1754,7 @@ impl TextElement {
         // Diagnostics keep highest priority so errors remain visible regardless
         // of language coloring.
         styles = gpui::combine_highlights(custom_styles, styles).collect();
+        styles = gpui::combine_highlights(decoration_styles, styles).collect();
         styles = gpui::combine_highlights(diagnostic_styles, styles).collect();
 
         Some(styles)
