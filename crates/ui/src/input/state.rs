@@ -29,7 +29,9 @@ use super::{
     number_input,
 };
 use crate::Size;
-use crate::actions::{SelectDown, SelectLeft, SelectRight, SelectUp};
+use crate::actions::{
+    SelectDown, SelectLeft, SelectPageDown, SelectPageUp, SelectRight, SelectUp,
+};
 use crate::scroll::AutoScroll;
 use crate::highlighter::DiagnosticSet;
 #[cfg(not(target_family = "wasm"))]
@@ -203,6 +205,8 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("right", MoveRight, Some(CONTEXT)),
         KeyBinding::new("pageup", MovePageUp, Some(CONTEXT)),
         KeyBinding::new("pagedown", MovePageDown, Some(CONTEXT)),
+        KeyBinding::new("shift-pageup", SelectPageUp, Some(CONTEXT)),
+        KeyBinding::new("shift-pagedown", SelectPageDown, Some(CONTEXT)),
         KeyBinding::new("tab", IndentInline, Some(CONTEXT)),
         KeyBinding::new("shift-tab", OutdentInline, Some(CONTEXT)),
         #[cfg(target_os = "macos")]

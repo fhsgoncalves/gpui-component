@@ -1,5 +1,6 @@
 use gpui::{Context, Point, Window};
 
+use crate::actions::{SelectPageDown, SelectPageUp};
 use crate::input::{
     InputState, MoveDown, MoveEnd, MoveHome, MoveLeft, MovePageDown, MovePageUp, MoveRight,
     MoveToEnd, MoveToNextWord, MoveToPreviousWord, MoveToStart, MoveUp, RopeExt as _,
@@ -58,21 +59,15 @@ impl InputState {
     /// Move the cursor vertically by one line (up or down) while preserving the column if possible.
     ///
     /// move_lines: Number of lines to move vertically (positive for down, negative for up).
-    pub(super) fn move_vertical(
-        &mut self,
-        move_lines: isize,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn vertical_move_offset(&self, move_lines: isize) -> Option<usize> {
         if self.mode.is_single_line() {
-            return;
+            return None;
         }
         let Some(last_layout) = &self.last_layout else {
-            return;
+            return None;
         };
 
         let offset = self.cursor();
-        let was_preferred_column = self.preferred_column;
 
         let mut display_point = self.display_map.offset_to_wrap_display_point(offset);
 
@@ -97,7 +92,7 @@ impl InputState {
         display_point.column = 0;
         let mut new_offset = self.display_map.wrap_display_point_to_offset(display_point);
 
-        if let Some((preferred_x, column)) = was_preferred_column {
+        if let Some((preferred_x, column)) = self.preferred_column {
             // Get display point again to update local_row.
             let mut next_display_point = self.display_map.offset_to_wrap_display_point(new_offset);
             next_display_point.column = 0;
@@ -124,6 +119,20 @@ impl InputState {
             }
         }
 
+        Some(new_offset)
+    }
+
+    pub(super) fn move_vertical(
+        &mut self,
+        move_lines: isize,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let was_preferred_column = self.preferred_column;
+        let Some(new_offset) = self.vertical_move_offset(move_lines) else {
+            return;
+        };
+
         self.pause_blink_cursor(cx);
         let direction = if move_lines < 0 {
             MoveDirection::Up
@@ -132,6 +141,24 @@ impl InputState {
         };
         self.move_to(new_offset, Some(direction), cx);
         // Set back the preferred_column
+        self.preferred_column = was_preferred_column;
+        cx.notify();
+    }
+
+    fn select_vertical(&mut self, move_lines: isize, cx: &mut Context<Self>) {
+        let was_preferred_column = self.preferred_column;
+        let Some(new_offset) = self.vertical_move_offset(move_lines) else {
+            return;
+        };
+        let direction = if move_lines < 0 {
+            MoveDirection::Up
+        } else {
+            MoveDirection::Down
+        };
+
+        self.select_to(new_offset, cx);
+        self.scroll_to(new_offset, Some(direction), cx);
+        self.pause_blink_cursor(cx);
         self.preferred_column = was_preferred_column;
         cx.notify();
     }
@@ -224,6 +251,34 @@ impl InputState {
 
         let display_lines = (self.input_bounds.size.height / last_layout.line_height) as isize;
         self.move_vertical(display_lines, window, cx);
+    }
+
+    pub(super) fn select_page_up(
+        &mut self,
+        _: &SelectPageUp,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(last_layout) = &self.last_layout else {
+            return;
+        };
+
+        let display_lines = (self.input_bounds.size.height / last_layout.line_height) as isize;
+        self.select_vertical(-display_lines, cx);
+    }
+
+    pub(super) fn select_page_down(
+        &mut self,
+        _: &SelectPageDown,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(last_layout) = &self.last_layout else {
+            return;
+        };
+
+        let display_lines = (self.input_bounds.size.height / last_layout.line_height) as isize;
+        self.select_vertical(display_lines, cx);
     }
 
     pub(super) fn home(&mut self, _: &MoveHome, _: &mut Window, cx: &mut Context<Self>) {
